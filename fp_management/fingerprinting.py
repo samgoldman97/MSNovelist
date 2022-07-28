@@ -46,9 +46,10 @@ class Fingerprinter:
         java_mem = sc.config['java_memory']
         option_xmx = f"-Xmx{java_mem}m"
         option_xms = f"-Xms{java_mem}m"
+
         if not jp.isJVMStarted():
-            jp.startJVM(jp.getDefaultJVMPath(), 
-                        option_xmx, option_xms, "-Djava.class.path="+lib_path,
+            default_jvm_path = jp.getDefaultJVMPath()
+            jp.startJVM(default_jvm_path, option_xmx, option_xms, "-Djava.class.path="+lib_path,
                         convertStrings = True)
         fpu = jp.JClass('ch.moduled.fingerprintwrapper.FingerprintUtil').instance
         self.n_fingerprinters = fpu.makeFingerprinters(2*threads)

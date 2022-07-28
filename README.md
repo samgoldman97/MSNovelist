@@ -9,6 +9,15 @@ stravs@imsb.biol.ethz.ch
 
 submitted, bioRxiv: https://www.biorxiv.org/content/10.1101/2021.07.06.450875v1
 
+## Running as a standalone fingerprinter
+
+After installing the docker img, execute:   
+
+```
+run docker run -it -v $(pwd)/fp_scripts:/fp_scripts stravsm/msnovelist /bin/bash
+python3 /fp_scripts/fingerprint_smiles.py
+```
+
 ## Installation and use
 
 *MSNovelist* is provided as a Docker container for end users. This requires a working Docker installation on Windows or Linux; on the other hand, no other dependencies

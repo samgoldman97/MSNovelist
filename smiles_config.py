@@ -20,7 +20,6 @@ if 'JUPYTER' not in os.environ:
 else:
     args = parser.parse_args({})
 
-
 FILENAME_DEFAULT = "config.yaml"
 FILENAME_MACHINE = "config." + os.environ['COMPUTERNAME'] + '.yaml'
 
