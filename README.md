@@ -14,7 +14,7 @@ submitted, bioRxiv: https://www.biorxiv.org/content/10.1101/2021.07.06.450875v1
 After installing the docker img, execute:   
 
 ```
-run docker run -it -v $(pwd)/fp_scripts:/fp_scripts stravsm/msnovelist /bin/bash
+docker run -it -v $(pwd)/fp_scripts:/fp_scripts -v $(pwd)/fp_data:/fp_data stravsm/msnovelist /bin/bash
 python3 /fp_scripts/fingerprint_smiles.py
 ```
 
