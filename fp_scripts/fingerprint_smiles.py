@@ -5,7 +5,14 @@ import argparse
 from pathlib import Path
 import pickle
 import numpy as np
+import h5py
 import subprocess
+from rdkit import Chem
+import multiprocessing as mp
+from tqdm import tqdm
+import h5py
+
+from functools import partial
 
 sys.path.append("/msnovelist")
 
@@ -19,10 +26,77 @@ parser.add_argument("--mounted-dir", type=str, help="Name of mounted volume",
 parser.add_argument("--uid", type=str, help="Name of owner",
                     default="1002"
                     )
+parser.add_argument("--out-prefix", type=str, help="Output prefix",
+                    default="precomputed"
+                    )
 parser.add_argument("--fp-map", type=str,
                     help="Name of fp mapping file",
                     default=None)
+parser.add_argument("--workers", type=int,
+                    default=30,
+                    help="Num workers",)
 args = parser.parse_args()
+
+def batch_func(list_inputs, function):
+    outputs = []
+    for i in list_inputs:
+        outputs.append(function(i))
+    return outputs
+
+def chunked_parallel(input_list, function, chunks=100,
+                     max_cpu=16):
+    """chunked_parallel.
+
+    Args:
+        input_list : list of objects to apply function
+        function : Callable with 1 input and returning a single value
+        chunks: number of hcunks
+        max_cpu: Max num cpus
+    """
+    # Adding it here fixes somessetting disrupted elsewhere
+    list_len = len(input_list)
+    num_chunks = min(list_len, chunks)
+    step_size = len(input_list) // num_chunks
+
+    chunked_list = [input_list[i:i+step_size]
+                    for i in range(0, len(input_list), step_size)]
+
+    partial_func = partial(batch_func, function=function)
+
+    list_outputs = simple_parallel(chunked_list,
+                                   partial_func,
+                                   max_cpu=max_cpu)
+    # Unroll
+    full_output = [j for i in list_outputs for j in i]
+    return full_output
+
+def simple_parallel(input_list, function, max_cpu=16): 
+    """ Simple parallelization.
+
+    Use map async and retries in case we get odd stalling behavior.
+
+    input_list: Input list to op on
+    function: Fn to apply
+    max_cpu: Num cpus
+
+    """
+    cpus = min(mp.cpu_count(), max_cpu)
+    pool = mp.Pool(processes=cpus)
+    async_results = [pool.apply_async(function, args=(i, ))
+                     for i in input_list]
+    pool.close()
+    list_outputs = []
+    for async_result in tqdm(async_results, total=len(input_list)):
+        result = async_result.get()
+        list_outputs.append(result)
+    pool.join()
+    return list_outputs
+
+def get_inchikey(smi):
+    try:
+        return Chem.MolToInchiKey(Chem.MolFromSmiles(smi))
+    except:
+        return None
 
 # Remove arguments to avoid conflict with secondary arguments
 while len(sys.argv) > 1:
@@ -35,6 +109,8 @@ smi_list = args.smi_list
 user = args.uid
 mounted_dir = Path(args.mounted_dir)
 fp_map = args.fp_map
+workers = args.workers
+out_prefix = args.out_prefix
 
 if smi_list is None:
     smis = ["CCC"]
@@ -46,20 +122,27 @@ else:
     smis = [i.strip() for i in open(in_file, "rb").readlines()]
 
 path = sc.config['fingerprinter_path']
-threads = 30
 fpr.Fingerprinter.init_instance(path,
-                                threads,
+                                workers,
                                 capture=True)
 fingerprinter = fpr.Fingerprinter.get_instance()
-
 out_fps = fingerprinter.process(smis, calc_fingerprint=True,
                                 return_b64=True)
 full_output = [(fpr.get_fp(i['fingerprint']), i['smiles_canonical'])
                for i in out_fps]
-full_output = [(i, j) for i, j in full_output if i is not None]
+
 full_output, full_smis = zip(*full_output)
+
+# Create inchikeys
+inchikeys = chunked_parallel(full_smis, get_inchikey, chunks=200,
+                             max_cpu=workers)
+
+full_output = [(i.squeeze(), j) for i, j in zip(full_output, inchikeys)
+               if j is not None and i is not None]
+full_output, full_inchikeys = zip(*full_output)
 full_output = np.vstack(full_output)
 
+# Subset down to appropriate fp size
 if fp_map is not None:
     fp_map = pickle.load(open(fp_map, "rb"))
     num_to_set = len(fp_map)
@@ -72,9 +155,17 @@ if fp_map is not None:
 # Output to file
 output_dir = mounted_dir / "fp_out"
 output_dir.mkdir(exist_ok=True)
-output_file = output_dir / "output.p"
-with open(output_file, "wb") as fp:
-    pickle.dump((full_output, full_smis), fp)
+output_index_file = output_dir / f"{out_prefix}_index.p"
+output_hdf_file = output_dir / f"{out_prefix}.hdf5"
+
+with open(output_index_file, "wb") as fp:
+    key_to_ind = dict(zip(full_inchikeys, np.arange(len(full_inchikeys))))
+    pickle.dump(key_to_ind, fp)
+
+print("Dumping to h5py")
+h = h5py.File(output_hdf_file, "w")
+dset = h.create_dataset("features", data=full_output, 
+                        dtype=np.uint8)
 
 # Mod permissions of the file
 mod_cmd = f'chown -R {user} {output_dir}'
