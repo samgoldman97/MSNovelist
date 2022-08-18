@@ -1,5 +1,4 @@
 """ Fingerprint smiles """
-import os
 import sys
 import argparse
 from pathlib import Path
@@ -10,9 +9,9 @@ import subprocess
 from rdkit import Chem
 import multiprocessing as mp
 from tqdm import tqdm
-import h5py
 
 from functools import partial
+from itertools import islice
 
 sys.path.append("/msnovelist")
 
@@ -119,19 +118,39 @@ else:
     if not in_file.exists():
         raise ValueError()
 
-    smis = [i.strip() for i in open(in_file, "rb").readlines()]
+    smis = [i.strip() for i in open(in_file, "r").readlines()]
 
 path = sc.config['fingerprinter_path']
-fpr.Fingerprinter.init_instance(path,
-                                workers,
-                                capture=True)
-fingerprinter = fpr.Fingerprinter.get_instance()
-out_fps = fingerprinter.process(smis, calc_fingerprint=True,
-                                return_b64=True)
-full_output = [(fpr.get_fp(i['fingerprint']), i['smiles_canonical'])
-               for i in out_fps]
 
+
+def batches(it, chunk_size):
+    it = iter(it)
+    return iter(lambda: list(islice(it, chunk_size)), [])
+
+def get_fps(smiles):
+    import fp_management.fingerprinting as fpr
+
+    fpr.Fingerprinter.init_instance(path,
+                                    workers,
+                                    capture=True)
+    fingerprinter = fpr.Fingerprinter.get_instance()
+    out_fps = fingerprinter.process(smiles, calc_fingerprint=True,
+                                    return_b64=True)
+    full_output = [(fpr.get_fp(i['fingerprint']), i['smiles_canonical'])
+                   for i in out_fps]
+    return full_output
+
+smis = smis
+batched_smis = list(batches(smis, 10000))
+import time
+start = time.time()
+out_smis = simple_parallel(batched_smis, get_fps, max_cpu=workers)
+#out_smis = [get_fps(j) for j in batched_smis]
+end = time.time()
+print(f"TIME: {end - start}")
+full_output = [j for i in out_smis for j in i]
 full_output, full_smis = zip(*full_output)
+#raise ValueError("Debugging, done with code")
 
 # Create inchikeys
 inchikeys = chunked_parallel(full_smis, get_inchikey, chunks=200,
